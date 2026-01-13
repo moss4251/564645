@@ -1,0 +1,644 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>小小数学家：方位大作战</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=ZCOOL+XiaoWei&family=Noto+Sans+SC:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Noto Sans SC', sans-serif;
+            background-color: #f0f9ff;
+            touch-action: manipulation;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .comic-font {
+            font-family: 'ZCOOL+XiaoWei', serif;
+        }
+        .scrollbar-hide::-webkit-scrollbar {
+            display: none;
+        }
+        .scrollbar-hide {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        /* Animation Utilities */
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes zoomIn { from { transform: scale(0.95); } to { transform: scale(1); } }
+        @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        @keyframes bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+        
+        .animate-fade-in { animation: fadeIn 0.5s ease-out; }
+        .animate-zoom-in { animation: zoomIn 0.5s ease-out; }
+        .animate-slide-up { animation: slideUp 0.5s ease-out; }
+        .animate-bounce-custom { animation: bounce 1s infinite; }
+    </style>
+    
+    <script type="importmap">
+{
+  "imports": {
+    "@google/genai": "https://esm.sh/@google/genai@^1.35.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "react": "https://esm.sh/react@^19.2.3"
+  }
+}
+</script>
+</head>
+<body class="bg-sky-50 overflow-hidden h-screen w-full">
+
+    <div id="app" class="h-full w-full flex flex-col max-w-md mx-auto shadow-2xl relative select-none bg-sky-50">
+        <!-- Content will be injected here by JavaScript -->
+    </div>
+
+    <script type="module">
+        import { GoogleGenAI } from "@google/genai";
+
+        // --- Configuration & Constants ---
+        
+        // Initialize GenAI
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+        const Direction = { UP: '上', DOWN: '下', LEFT: '左', RIGHT: '右' };
+        const Facing = { FRONT: '面向你', BACK: '背向你' };
+        const Hand = { LEFT: '左手', RIGHT: '右手' };
+        
+        const ANIMALS = [
+            { id: 'turtle', name: '小乌龟', emoji: '🐢', color: 'bg-green-100' },
+            { id: 'rabbit', name: '小兔子', emoji: '🐰', color: 'bg-pink-100' },
+            { id: 'cat', name: '小花猫', emoji: '🐱', color: 'bg-yellow-100' },
+            { id: 'dog', name: '小狗狗', emoji: '🐶', color: 'bg-blue-100' },
+        ];
+        const GRID_SIZE = 3;
+
+        // --- State Management ---
+        const state = {
+            step: 0,
+            status: 'START', // START, PLAYING, FAIL, WIN
+            lrQuestion: null,
+            gridQuestion: null,
+            gridPlacements: {},
+            selectedAnimalId: null,
+            teacherMsg: "",
+            isLoading: false,
+            isTransitioning: false
+        };
+
+        // --- Audio System ---
+        let audioCtx = null;
+
+        function getAudioContext() {
+            if (!audioCtx) {
+                const Ctx = window.AudioContext || window.webkitAudioContext;
+                if (Ctx) audioCtx = new Ctx();
+            }
+            if (audioCtx && audioCtx.state === 'suspended') {
+                audioCtx.resume().catch(() => {});
+            }
+            return audioCtx;
+        }
+
+        function playSound(type) {
+            const ctx = getAudioContext();
+            if (!ctx) return;
+            
+            const masterGain = ctx.createGain();
+            masterGain.connect(ctx.destination);
+            masterGain.gain.value = 0.5;
+
+            if (type === 'correct' || type === 'win') {
+                const duration = type === 'win' ? 3.5 : 1.5;
+                const bufferSize = ctx.sampleRate * duration;
+                const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+                const data = buffer.getChannelData(0);
+                
+                let lastOut = 0;
+                for (let i = 0; i < bufferSize; i++) {
+                    const white = Math.random() * 2 - 1;
+                    data[i] = (lastOut + (0.02 * white)) / 1.02;
+                    lastOut = data[i];
+                    data[i] *= 3.5; 
+                }
+
+                const clapCount = type === 'win' ? 30 : 12; 
+                for (let i = 0; i < clapCount; i++) {
+                    const source = ctx.createBufferSource();
+                    source.buffer = buffer;
+                    const gainNode = ctx.createGain();
+                    const filter = ctx.createBiquadFilter();
+                    
+                    filter.type = 'lowpass';
+                    filter.frequency.value = 800 + Math.random() * 800; 
+                    
+                    const spread = type === 'win' ? duration * 0.9 : duration * 0.7;
+                    const start = ctx.currentTime + (Math.random() * spread);
+                    
+                    gainNode.gain.setValueAtTime(0, start);
+                    gainNode.gain.linearRampToValueAtTime(0.3, start + 0.01); 
+                    gainNode.gain.exponentialRampToValueAtTime(0.001, start + 0.12);
+
+                    source.connect(filter);
+                    filter.connect(gainNode);
+                    gainNode.connect(masterGain);
+                    source.start(start);
+                }
+                
+                const osc = ctx.createOscillator();
+                const oscGain = ctx.createGain();
+                osc.connect(oscGain);
+                oscGain.connect(masterGain);
+                osc.type = 'sine';
+                
+                if (type === 'correct') {
+                    osc.frequency.setValueAtTime(523.25, ctx.currentTime);
+                    osc.frequency.linearRampToValueAtTime(659.25, ctx.currentTime + 0.1);
+                    oscGain.gain.setValueAtTime(0.1, ctx.currentTime);
+                    oscGain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.4);
+                } else {
+                    osc.frequency.setValueAtTime(523.25, ctx.currentTime);
+                    osc.frequency.linearRampToValueAtTime(1046.50, ctx.currentTime + 0.4);
+                    oscGain.gain.setValueAtTime(0.2, ctx.currentTime);
+                    oscGain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.8);
+                }
+                osc.start(ctx.currentTime);
+                osc.stop(ctx.currentTime + 0.8);
+
+            } else if (type === 'wrong') {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.connect(gain);
+                gain.connect(masterGain);
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(150, ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(50, ctx.currentTime + 0.4);
+                gain.gain.setValueAtTime(0.4, ctx.currentTime);
+                gain.gain.linearRampToValueAtTime(0.01, ctx.currentTime + 0.4);
+                osc.start(ctx.currentTime);
+                osc.stop(ctx.currentTime + 0.4);
+            }
+        }
+
+        // --- Logic Generators ---
+        function generateLR(forcedFacing) {
+            const facings = [Facing.FRONT, Facing.BACK];
+            const hands = [Hand.LEFT, Hand.RIGHT];
+            return {
+                facing: forcedFacing || facings[Math.floor(Math.random() * facings.length)],
+                handRaised: hands[Math.floor(Math.random() * hands.length)]
+            };
+        }
+
+        function generateGrid() {
+            const turtlePos = { x: 1, y: 1 };
+            const validNeighbors = [
+                { x: 1, y: 0 }, { x: 1, y: 2 }, { x: 0, y: 1 }, { x: 2, y: 1 }
+            ];
+            const pickedPos = validNeighbors.sort(() => Math.random() - 0.5).slice(0, 3);
+            const others = ANIMALS.filter(a => a.id !== 'turtle');
+
+            const animalPlacements = others.map((animal, i) => {
+                const targetPos = pickedPos[i];
+                const dx = targetPos.x - turtlePos.x;
+                const dy = targetPos.y - turtlePos.y;
+
+                let clue = "";
+                const useSelfRelative = Math.random() > 0.5;
+
+                if (useSelfRelative) {
+                    if (dx < 0) clue = `我在小乌龟的 ${Direction.LEFT} 边`; 
+                    else if (dx > 0) clue = `我在小乌龟的 ${Direction.RIGHT} 边`; 
+                    else if (dy < 0) clue = `我在小乌龟的 ${Direction.UP} 边`; 
+                    else if (dy > 0) clue = `我在小乌龟的 ${Direction.DOWN} 边`; 
+                } else {
+                    if (dx < 0) clue = `小乌龟在我的 ${Direction.RIGHT} 边`;
+                    else if (dx > 0) clue = `小乌龟在我的 ${Direction.LEFT} 边`;
+                    else if (dy < 0) clue = `小乌龟在我的 ${Direction.DOWN} 边`;
+                    else if (dy > 0) clue = `小乌龟在我的 ${Direction.UP} 边`;
+                }
+
+                return { animal, clue, targetPos };
+            });
+
+            return { turtlePos, animalPlacements };
+        }
+
+        async function getTeacherEncouragement(isSuccess, score) {
+            try {
+                const prompt = isSuccess 
+                  ? `作为一个亲切的小学数学老师，给一个刚刚连续答对10道空间方位题并通关的一年级学生写一句表扬的话。要求：语气极其活泼、充满鼓励，包含一些可爱的表情。字数在30字以内。`
+                  : `作为一个亲切的小学数学老师，安慰一个在第${score + 1}题做错而需要重新开始的一年级学生。要求：语气温柔，告诉他没关系，深呼吸再试一次，你是最棒的。字数在30字以内。`;
+
+                const response = await ai.models.generateContent({
+                  model: 'gemini-3-flash-preview',
+                  contents: prompt,
+                });
+                return response.text || (isSuccess ? "太棒了！你真是方位小能手！" : "没关系，我们重新挑战一次吧！");
+            } catch (error) {
+                console.error("Gemini Error:", error);
+                return isSuccess ? "恭喜你通关啦！" : "加油，再试一次！";
+            }
+        }
+
+        // --- Game Actions ---
+        function startGame() {
+            getAudioContext();
+            playSound('correct');
+            state.step = 0;
+            state.status = 'PLAYING';
+            prepareStep(0);
+            render();
+        }
+
+        function prepareStep(step) {
+            if (step < 5) {
+                const facing = step < 2 ? Facing.BACK : Facing.FRONT;
+                state.lrQuestion = generateLR(facing);
+                state.gridQuestion = null;
+            } else {
+                state.gridQuestion = generateGrid();
+                state.gridPlacements = { 'turtle': state.gridQuestion.turtlePos };
+                state.selectedAnimalId = null;
+                state.lrQuestion = null;
+            }
+        }
+
+        function handleNextLevel() {
+            const nextStep = state.step + 1;
+            
+            if (nextStep >= 10) playSound('win');
+            else playSound('correct');
+
+            state.isTransitioning = true;
+            render();
+
+            setTimeout(() => {
+                if (nextStep >= 10) {
+                    handleWin();
+                } else {
+                    state.step = nextStep;
+                    prepareStep(nextStep);
+                    setTimeout(() => {
+                        state.isTransitioning = false;
+                        render();
+                    }, 50);
+                }
+            }, 500);
+        }
+
+        async function handleWin() {
+            state.status = 'WIN';
+            state.isLoading = true;
+            state.isTransitioning = false;
+            render(); // Show win screen with loading
+            const msg = await getTeacherEncouragement(true, 10);
+            state.teacherMsg = msg;
+            state.isLoading = false;
+            render(); // Show win screen with message
+        }
+
+        function handleRestart() {
+            playSound('wrong');
+            state.status = 'FAIL';
+            state.teacherMsg = "加油，再试试，吕老师相信你可以的🙂";
+            state.isLoading = false;
+            render();
+        }
+
+        function checkLRAnswer(answer) {
+            if (state.isTransitioning || !state.lrQuestion) return;
+            if (answer === state.lrQuestion.handRaised) handleNextLevel();
+            else handleRestart();
+        }
+
+        function checkGridAnswer() {
+            if (state.isTransitioning || !state.gridQuestion) return;
+            const isCorrect = state.gridQuestion.animalPlacements.every(p => {
+                const userPos = state.gridPlacements[p.animal.id];
+                return userPos && userPos.x === p.targetPos.x && userPos.y === p.targetPos.y;
+            });
+            if (isCorrect) handleNextLevel();
+            else handleRestart();
+        }
+
+        // --- Rendering ---
+        const app = document.getElementById('app');
+
+        function render() {
+            app.innerHTML = '';
+            
+            // Header
+            app.appendChild(renderHeader());
+
+            // Main Content Area
+            const main = document.createElement('main');
+            main.className = "flex-1 p-2 relative flex flex-col overflow-hidden";
+            
+            if (state.status === 'START') {
+                main.innerHTML = renderStartScreen();
+                // Bind Start
+                main.querySelector('#start-btn').addEventListener('click', startGame);
+            } else if (state.status === 'PLAYING') {
+                const container = document.createElement('div');
+                container.className = `flex-1 flex flex-col h-full justify-center transition-opacity duration-500 ${state.isTransitioning ? 'opacity-0' : 'opacity-100'}`;
+                
+                if (state.step < 5) {
+                    container.innerHTML = renderLeftRight();
+                    // Bind LR
+                    container.querySelectorAll('[data-hand]').forEach(btn => {
+                        btn.addEventListener('click', (e) => checkLRAnswer(e.currentTarget.dataset.hand));
+                    });
+                } else {
+                    container.innerHTML = renderGrid();
+                    // Bind Grid
+                    bindGridEvents(container);
+                }
+                main.appendChild(container);
+            } else {
+                const overlay = document.createElement('div');
+                overlay.className = "absolute inset-0 bg-white/95 z-50 flex flex-col items-center justify-center p-6 text-center space-y-4 animate-slide-up backdrop-blur-sm";
+                overlay.innerHTML = renderResultScreen();
+                // Bind Restart
+                overlay.querySelector('#restart-btn').addEventListener('click', startGame);
+                main.appendChild(overlay);
+            }
+
+            app.appendChild(main);
+        }
+
+        function renderHeader() {
+            const div = document.createElement('div');
+            div.className = "bg-sky-500 px-3 py-2 text-white flex justify-between items-center shadow-md z-10 shrink-0";
+            
+            let dots = '';
+            for(let i=0; i<10; i++) {
+                let cls = i < state.step ? 'bg-yellow-300' : (i === state.step ? 'bg-white scale-125 ring-2 ring-white/50' : 'bg-sky-700');
+                dots += `<div class="w-1.5 h-1.5 rounded-full transition-all duration-300 ${cls}"></div>`;
+            }
+
+            div.innerHTML = `
+                <div>
+                  <h1 class="text-lg font-bold comic-font tracking-wider">方位大作战</h1>
+                  <div class="flex items-center gap-2 text-[10px] opacity-90">
+                    <span class="bg-white/20 px-2 py-0.5 rounded-full">第 ${state.step + 1} / 10 关</span>
+                    <span>${state.step < 5 ? '左右分辨' : '九宫格'}</span>
+                  </div>
+                </div>
+                <div class="flex gap-0.5">${dots}</div>
+            `;
+            return div;
+        }
+
+        function renderStartScreen() {
+            return `
+                <div class="flex flex-col items-center justify-center h-full space-y-6 animate-zoom-in">
+                    <div class="text-center space-y-2">
+                        <div class="text-7xl animate-bounce-custom mb-4">🧭</div>
+                        <h2 class="text-2xl font-black text-sky-800 comic-font">准备好挑战了吗？</h2>
+                        <p class="text-gray-600 px-8 text-sm">
+                            连续答对 <strong class="text-orange-500 text-lg">10</strong> 道题<br/>
+                            通关有惊喜哦！
+                        </p>
+                    </div>
+                    <button id="start-btn" class="bg-orange-500 hover:bg-orange-600 active:scale-95 text-white font-black text-xl py-4 px-12 rounded-full shadow-[0_6px_0_rgb(194,65,12)] active:shadow-none active:translate-y-2 transition-all">
+                        开始闯关
+                    </button>
+                </div>
+            `;
+        }
+
+        function renderResultScreen() {
+            const isWin = state.status === 'WIN';
+            return `
+                <div class="text-8xl mb-2 filter drop-shadow-lg">${isWin ? '🎉' : '💪'}</div>
+                <h2 class="text-3xl font-black comic-font tracking-widest ${isWin ? 'text-yellow-500' : 'text-sky-700'}">
+                  ${isWin ? '挑战成功！' : '加油！'}
+                </h2>
+                <div class="w-full bg-sky-50 p-4 rounded-3xl border-2 border-sky-200 relative mt-6 max-w-xs mx-auto">
+                   <div class="absolute -top-5 left-1/2 -translate-x-1/2 text-3xl bg-white rounded-full p-1 border-2 border-sky-200">👩‍🏫</div>
+                   <p class="text-sky-900 font-medium italic text-base pt-3 leading-relaxed">
+                     ${state.isLoading ? "老师正在思考评语..." : `“${state.teacherMsg}”`}
+                   </p>
+                </div>
+                <button id="restart-btn" class="mt-6 bg-sky-500 hover:bg-sky-600 text-white font-bold text-lg py-3 px-10 rounded-2xl shadow-lg transition-all active:scale-95">
+                  ${isWin ? '再玩一次' : '再试一次'}
+                </button>
+            `;
+        }
+
+        function renderLeftRight() {
+            const { facing, handRaised } = state.lrQuestion;
+            // Visual Logic
+            const isScreenLeftRaised = (facing === Facing.BACK && handRaised === Hand.LEFT) || 
+                                       (facing === Facing.FRONT && handRaised === Hand.RIGHT);
+            const isScreenRightRaised = (facing === Facing.BACK && handRaised === Hand.RIGHT) || 
+                                        (facing === Facing.FRONT && handRaised === Hand.LEFT);
+            
+            const headClass = facing === Facing.FRONT ? 'bg-[#ffdec8]' : 'bg-gray-900';
+            const badgeClass = facing === Facing.FRONT ? 'bg-orange-500' : 'bg-gray-700';
+            
+            // Face Features HTML
+            let faceFeatures = '';
+            if (facing === Facing.FRONT) {
+                faceFeatures = `
+                   <div class="absolute inset-0 flex flex-col items-center justify-center space-y-2">
+                     <div class="absolute top-0 w-full h-6 bg-gray-800 rounded-t-full"></div>
+                     <div class="flex space-x-4 mt-1">
+                        <div class="w-2 h-2 bg-gray-800 rounded-full"></div>
+                        <div class="w-2 h-2 bg-gray-800 rounded-full"></div>
+                     </div>
+                     <div class="w-4 h-1.5 border-b-4 border-red-400 rounded-full"></div>
+                   </div>`;
+            } else {
+                faceFeatures = `
+                     <div class="absolute inset-0 flex flex-col items-center">
+                         <div class="w-full h-full rounded-full bg-gradient-to-b from-gray-800 to-gray-700 opacity-90"></div>
+                         <div class="absolute -left-1 top-1/2 w-2 h-4 bg-[#ffdec8] rounded-l-full -z-10"></div>
+                         <div class="absolute -right-1 top-1/2 w-2 h-4 bg-[#ffdec8] rounded-r-full -z-10"></div>
+                     </div>`;
+            }
+
+            // Arms HTML
+            const leftArmClass = isScreenLeftRaised ? '-rotate-[150deg] -translate-y-2' : 'rotate-12';
+            const rightArmClass = isScreenRightRaised ? 'rotate-[150deg] -translate-y-2' : '-rotate-12';
+            const leftArmContent = isScreenLeftRaised ? '<div class="absolute -bottom-8 -left-2 text-2xl animate-bounce-custom">✋</div>' : '';
+            const rightArmContent = isScreenRightRaised ? '<div class="absolute -bottom-8 -right-2 text-2xl animate-bounce-custom">✋</div>' : '';
+
+            return `
+            <div class="flex flex-col items-center justify-between h-full py-1">
+              <div class="text-center mb-1 px-4">
+                <h2 class="text-xl font-bold text-sky-800 comic-font mb-1">他举起的是哪只手？</h2>
+                <div class="bg-white/60 py-1 px-3 rounded-lg inline-block text-gray-600 text-xs font-medium border border-white">
+                    提示：注意他是面向你还是背对你哦
+                </div>
+              </div>
+
+              <div class="relative flex-1 w-full flex items-center justify-center min-h-[160px]">
+                <div class="relative w-32 h-48 flex flex-col items-center transition-all duration-500">
+                   <!-- Head -->
+                   <div class="w-20 h-20 rounded-full border-4 border-gray-800 z-10 relative shadow-md ${headClass}">
+                     ${faceFeatures}
+                   </div>
+
+                   <!-- Body -->
+                   <div class="w-24 h-16 bg-blue-500 rounded-t-3xl relative -mt-2 z-0 shadow-inner flex justify-center">
+                      ${facing === Facing.FRONT ? '<div class="w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-t-[10px] border-t-white mt-1"></div>' : '<div class="mt-3 text-blue-300 font-bold text-[10px] opacity-50 tracking-widest">BACK</div>'}
+                      
+                      <!-- Left Arm -->
+                      <div class="absolute top-1 -left-3 w-6 h-20 bg-blue-500 rounded-full origin-top transition-all duration-500 border-4 border-blue-600/20 ${leftArmClass}">
+                        <div class="absolute bottom-0 w-full h-6 bg-[#ffdec8] rounded-full border-t-4 border-black/10"></div>
+                        ${leftArmContent}
+                      </div>
+
+                      <!-- Right Arm -->
+                      <div class="absolute top-1 -right-3 w-6 h-20 bg-blue-500 rounded-full origin-top transition-all duration-500 border-4 border-blue-600/20 ${rightArmClass}">
+                        <div class="absolute bottom-0 w-full h-6 bg-[#ffdec8] rounded-full border-t-4 border-black/10"></div>
+                        ${rightArmContent}
+                      </div>
+                   </div>
+
+                   <div class="absolute -bottom-4 px-3 py-1 rounded-full text-white font-bold shadow-lg text-xs ${badgeClass}">
+                     ${facing}
+                   </div>
+                </div>
+              </div>
+
+              <div class="grid grid-cols-2 gap-4 w-full max-w-xs mt-2 px-2 pb-4">
+                <button data-hand="${Hand.LEFT}" class="group relative bg-white border-b-4 border-pink-200 active:border-b-0 active:translate-y-1 rounded-2xl p-3 transition-all flex flex-col items-center touch-manipulation">
+                  <div class="text-3xl mb-1 group-hover:scale-110 transition-transform">👈</div>
+                  <div class="text-lg font-bold text-pink-500">左手</div>
+                </button>
+                <button data-hand="${Hand.RIGHT}" class="group relative bg-white border-b-4 border-blue-200 active:border-b-0 active:translate-y-1 rounded-2xl p-3 transition-all flex flex-col items-center touch-manipulation">
+                  <div class="text-3xl mb-1 group-hover:scale-110 transition-transform">👉</div>
+                  <div class="text-lg font-bold text-blue-500">右手</div>
+                </button>
+              </div>
+            </div>`;
+        }
+
+        function renderGrid() {
+            const isComplete = ANIMALS.every(a => !!state.gridPlacements[a.id]);
+
+            let cluesHtml = state.gridQuestion.animalPlacements.map(p => `
+                <div class="flex items-center gap-2 bg-gray-50 p-1.5 rounded-lg">
+                  <div class="w-7 h-7 rounded-full ${p.animal.color} flex items-center justify-center text-base shadow-sm shrink-0">
+                    ${p.animal.emoji}
+                  </div>
+                  <div class="bg-white px-2 py-1 rounded-lg border border-gray-100 shadow-sm relative text-xs text-gray-700 font-medium leading-tight">
+                       ${p.clue}
+                  </div>
+                </div>
+            `).join('');
+
+            let gridHtml = '';
+            for(let y=0; y<GRID_SIZE; y++) {
+                for(let x=0; x<GRID_SIZE; x++) {
+                    const occupantEntry = Object.entries(state.gridPlacements).find(([_, pos]) => pos.x === x && pos.y === y);
+                    const animalId = occupantEntry ? occupantEntry[0] : null;
+                    const animal = animalId ? ANIMALS.find(a => a.id === animalId) : null;
+                    const isTurtle = animalId === 'turtle';
+                    
+                    let content = '';
+                    if (animal) {
+                        const style = animalId === state.selectedAnimalId ? 'scale-110 opacity-50' : 'scale-100';
+                        content = `<div class="transition-all duration-300 ${style}">${animal.emoji}</div>`;
+                    } else if (x===1 && y===1) {
+                         content = `<div class="text-gray-300 text-[10px]">中心</div>`;
+                    } else {
+                         content = `<div class="w-1 h-1 bg-sky-100 rounded-full"></div>`;
+                    }
+
+                    let cellClass = `w-14 h-14 sm:w-16 sm:h-16 rounded-lg flex items-center justify-center text-3xl transition-all relative `;
+                    if (isTurtle) cellClass += 'bg-green-100 border-2 border-green-500 shadow-sm ';
+                    else cellClass += 'bg-white border-2 border-white cursor-pointer hover:bg-sky-50 active:scale-95 ';
+                    
+                    if (state.selectedAnimalId && !animal) cellClass += 'animate-pulse ring-2 ring-sky-300 ring-offset-1 ';
+
+                    gridHtml += `<div data-type="cell" data-x="${x}" data-y="${y}" class="${cellClass}">${content}</div>`;
+                }
+            }
+
+            let dockHtml = ANIMALS.filter(a => a.id !== 'turtle').map(animal => {
+                const isPlaced = !!state.gridPlacements[animal.id];
+                const isSelected = state.selectedAnimalId === animal.id;
+                let btnClass = "relative flex flex-col items-center justify-center w-14 h-12 rounded-xl border-b-2 transition-all ";
+                if (isSelected) btnClass += 'bg-yellow-100 border-yellow-400 -translate-y-1';
+                else if (isPlaced) btnClass += 'bg-gray-100 border-gray-300 opacity-50 grayscale';
+                else btnClass += 'bg-white border-gray-200 active:scale-95 touch-manipulation shadow-sm';
+
+                return `<button data-type="dock" data-id="${animal.id}" class="${btnClass}">
+                    <span class="text-2xl filter drop-shadow-sm">${animal.emoji}</span>
+                </button>`;
+            }).join('');
+
+            return `
+            <div class="flex flex-col h-full py-1">
+              <div class="bg-white rounded-xl p-2 shadow-sm border-2 border-sky-100 mb-2 overflow-y-auto shrink-0 scrollbar-hide flex-none max-h-[25vh]">
+                <div class="space-y-1.5">${cluesHtml}</div>
+              </div>
+
+              <div class="flex-1 flex flex-col items-center justify-center min-h-0 bg-transparent">
+                <div class="bg-sky-200 p-2 rounded-xl shadow-inner inline-block">
+                  <div class="grid grid-cols-3 gap-1">${gridHtml}</div>
+                </div>
+                <p class="text-[10px] text-gray-400 mt-2 mb-1">
+                   ${state.selectedAnimalId ? '👆 点击格子放置' : '👆 先点下方动物，再放入格子'}
+                </p>
+              </div>
+
+              <div class="shrink-0 pt-2">
+                <div class="flex justify-center gap-2 px-2 pb-2">${dockHtml}</div>
+                <button id="grid-check-btn" ${!isComplete ? 'disabled' : ''} class="w-full py-3 rounded-t-2xl text-lg font-bold shadow-[0_-4px_10px_rgba(0,0,0,0.05)] transition-all touch-manipulation ${isComplete ? 'bg-green-500 hover:bg-green-600 text-white translate-y-0' : 'bg-gray-100 text-gray-400 translate-y-full'}" style="transform: ${isComplete ? 'translateY(0)' : 'translateY(10px)'}">
+                    ✅ 我摆好啦！
+                </button>
+              </div>
+            </div>`;
+        }
+
+        function bindGridEvents(container) {
+            // Cell clicks
+            container.querySelectorAll('[data-type="cell"]').forEach(el => {
+                el.addEventListener('click', () => {
+                    const x = parseInt(el.dataset.x);
+                    const y = parseInt(el.dataset.y);
+                    
+                    if (state.selectedAnimalId) {
+                        // Cannot overwrite turtle
+                        if (x === state.gridQuestion.turtlePos.x && y === state.gridQuestion.turtlePos.y) return;
+                        state.gridPlacements[state.selectedAnimalId] = { x, y };
+                        state.selectedAnimalId = null;
+                        render(); // Re-render to show placement
+                    } else {
+                        // Pick up
+                        const occupantEntry = Object.entries(state.gridPlacements).find(([_, pos]) => pos.x === x && pos.y === y);
+                        if (occupantEntry && occupantEntry[0] !== 'turtle') {
+                            state.selectedAnimalId = occupantEntry[0];
+                            render();
+                        }
+                    }
+                });
+            });
+
+            // Dock clicks
+            container.querySelectorAll('[data-type="dock"]').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const id = btn.dataset.id;
+                    if (state.selectedAnimalId === id) state.selectedAnimalId = null;
+                    else state.selectedAnimalId = id;
+                    render();
+                });
+            });
+
+            // Submit
+            const btn = container.querySelector('#grid-check-btn');
+            if(btn) btn.addEventListener('click', checkGridAnswer);
+        }
+
+        // Start the app
+        render();
+
+    </script>
+</body>
+</html>
